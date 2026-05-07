@@ -1,3 +1,3 @@
-module github.com/finos-org-labs/codec
+module github.com/finosorg-labs/codec
 
 go 1.26.1

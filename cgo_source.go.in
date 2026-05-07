@@ -14,10 +14,10 @@ package codec
 #include "fix_codec.h"
 
 // Platform sources (dependency)
-#include "modules/platform/src/simd_detect.c"
-#include "modules/platform/src/mem_aligned.c"
-#include "modules/platform/src/error.c"
-#include "modules/platform/src/fc_init.c"
+#include "simd_detect.c"
+#include "mem_aligned.c"
+#include "error.c"
+#include "fc_init.c"
 
 // Platform-specific sources
 #if defined(__linux__)
