@@ -31,8 +31,10 @@ configure_file(
     @ONLY
 )
 
-# Add platform submodule
+# Add platform submodule (disable its tests)
+set(BUILD_TESTING OFF CACHE BOOL "Disable platform tests" FORCE)
 add_subdirectory(modules/platform EXCLUDE_FROM_ALL)
+set(BUILD_TESTING ON CACHE BOOL "Enable codec tests" FORCE)
 
 # Codec module sources
 set(CODEC_SOURCES

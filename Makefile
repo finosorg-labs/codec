@@ -57,7 +57,9 @@ LINUX_CONFIG := -G Ninja \
 
 default: linux
 
-all: format linux windows go
+all: format linux go
+# TODO: Re-enable Windows build after platform module has Windows-compatible GMP/MPFR libraries
+# all: format linux windows go
 
 qa: format qa-static qa-sanitizers
 	@echo "==> All QA checks completed"
