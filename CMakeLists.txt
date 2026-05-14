@@ -31,11 +31,32 @@ configure_file(
     @ONLY
 )
 
-# Add platform submodule (disable its tests) only if not already added
+# Use prebuilt platform library
 if(NOT TARGET finkit::platform)
-    set(BUILD_TESTING OFF CACHE BOOL "Disable platform tests" FORCE)
-    add_subdirectory(modules/platform EXCLUDE_FROM_ALL)
-    set(BUILD_TESTING ON CACHE BOOL "Enable codec tests" FORCE)
+    # Detect platform
+    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+            set(PLATFORM_BUILD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/modules/platform/build/darwin_arm64")
+        else()
+            set(PLATFORM_BUILD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/modules/platform/build/darwin_x86_64")
+        endif()
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        set(PLATFORM_BUILD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/modules/platform/build/linux_amd64")
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+        set(PLATFORM_BUILD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/modules/platform/build/windows_amd64")
+    else()
+        message(FATAL_ERROR "Unsupported platform: ${CMAKE_SYSTEM_NAME}")
+    endif()
+
+    # Import prebuilt platform library
+    add_library(finkit_platform_static STATIC IMPORTED)
+    set_target_properties(finkit_platform_static PROPERTIES
+        IMPORTED_LOCATION "${PLATFORM_BUILD_DIR}/libfinkit_platform_static.a"
+    )
+    target_include_directories(finkit_platform_static INTERFACE
+        "${CMAKE_CURRENT_SOURCE_DIR}/modules/platform/include"
+    )
+    add_library(finkit::platform ALIAS finkit_platform_static)
 endif()
 
 # Codec module sources

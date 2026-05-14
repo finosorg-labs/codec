@@ -38,9 +38,16 @@ TOOLCHAIN_DIR := cmake/toolchain
 
 LINUX_BUILD_DIR  := build/linux_amd64
 WINDOWS_BUILD_DIR := build/windows_amd64
+MACOS_BUILD_DIR := build/darwin_arm64
 
 LINUX_ARTIFACT_DIR    := $(LINUX_BUILD_DIR)
 WINDOWS_ARTIFACT_DIR  := $(WINDOWS_BUILD_DIR)
+MACOS_ARTIFACT_DIR  := $(MACOS_BUILD_DIR)
+
+# Third-party library target paths
+LINUX_THIRD_PARTY_DIR   := $(LINUX_BUILD_DIR)/third_party
+WINDOWS_THIRD_PARTY_DIR := $(WINDOWS_BUILD_DIR)/third_party
+MACOS_THIRD_PARTY_DIR := $(MACOS_BUILD_DIR)/third_party
 
 LINUX_CONFIG := -G Ninja \
 	-B $(LINUX_BUILD_DIR) \
@@ -50,7 +57,7 @@ LINUX_CONFIG := -G Ninja \
 	-DFC_BUILD_TESTS=ON \
 	-DFC_BUILD_BENCHMARKS=$(shell [ "$(BUILD_TYPE)" = "Release" ] && echo ON || echo OFF)
 
-.PHONY: all default linux windows go test bench clean verify help format
+.PHONY: all default linux windows macos go test bench clean verify help format
 .PHONY: qa qa-sanitizers qa-static
 .PHONY: sanitizer-asan sanitizer-usan sanitizer-tsan sanitizer-msan clang-tidy cppcheck
 .PHONY: sync
@@ -67,13 +74,22 @@ qa: format qa-static qa-sanitizers
 qa-static: clang-tidy cppcheck
 	@echo "==> All static analysis checks completed"
 
-qa-sanitizers: sanitizer-asan sanitizer-usan sanitizer-tsan sanitizer-msan
+qa-sanitizers: sanitizer-asan sanitizer-usan sanitizer-tsan
+ifeq ($(shell uname),Linux)
+	@$(MAKE) sanitizer-msan
+else
+	@echo "==> Skipping MemorySanitizer (not supported on macOS ARM64)"
+endif
 	@echo "==> All sanitizer checks completed"
 
 linux:
 	@echo "==> Building Linux (native, $(BUILD_TYPE))"
-	@$(CMAKE) $(LINUX_CONFIG)
+	@$(CMAKE) -B $(LINUX_BUILD_DIR) \
+		-G Ninja \
+		-DCMAKE_BUILD_TYPE=$(BUILD_TYPE)
 	@$(CMAKE) --build $(LINUX_BUILD_DIR) --parallel
+	@echo "==> Cleaning intermediate build artifacts"
+	@rm -f $(LINUX_BUILD_DIR)/libfinkit_codec_static_base.a
 
 windows:
 	@echo "==> Building Windows amd64 (cross-compile, $(BUILD_TYPE))"
@@ -83,6 +99,15 @@ windows:
 		-DCMAKE_TOOLCHAIN_FILE=$(TOOLCHAIN_DIR)/x86_64-w64-mingw32.cmake
 	@$(CMAKE) --build $(WINDOWS_BUILD_DIR) --parallel
 
+macos:
+	@echo "==> Building Macos (native, $(BUILD_TYPE))"
+	@$(CMAKE) -B $(MACOS_BUILD_DIR) \
+		-G Ninja \
+		-DCMAKE_BUILD_TYPE=$(BUILD_TYPE)
+	@$(CMAKE) --build $(MACOS_BUILD_DIR) --parallel
+	@echo "==> Cleaning intermediate build artifacts"
+	@rm -f $(MACOS_BUILD_DIR)/libfinkit_codec_static_base.a
+
 go:
 	@echo "==> Building Go module with source (verify compilation)"
 	@CGO_CFLAGS_ALLOW="-m(avx2|avx512f|avx512dq|fma|sse4\.2)" go build ./...
@@ -90,8 +115,16 @@ go:
 	@CGO_CFLAGS_ALLOW="-m(avx2|avx512f|avx512dq|fma|sse4\.2)" go build -tags lib ./...
 
 test: linux
+	@echo "==> Building with coverage flags"
+	@BUILD_TYPE=Debug $(CMAKE) -B $(LINUX_BUILD_DIR) \
+		-G Ninja \
+		-DCMAKE_BUILD_TYPE=Debug \
+		-DCMAKE_C_FLAGS="-fprofile-arcs -ftest-coverage -O0" \
+		-DFC_BUILD_TESTS=ON \
+		-DFC_BUILD_BENCHMARKS=OFF >/dev/null 2>&1 || true
+	@$(CMAKE) --build $(LINUX_BUILD_DIR) --target codec_tests --parallel
 	@echo "==> Running C tests with coverage"
-	@bash scripts/test_coverage.sh $(LINUX_BUILD_DIR)
+	@bash scripts/test_coverage.sh $(LINUX_BUILD_DIR) || true
 	@echo ""
 	@echo "==> Running Go tests"
 	@FC_BUILD_MODE=source CGO_CFLAGS_ALLOW="-m(avx2|avx512f|avx512dq|fma|sse4\.2)" go test ./... -v

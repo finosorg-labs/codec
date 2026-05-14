@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <dlfcn.h>
 
 /*
  * Global state
@@ -350,10 +351,11 @@ int fc_test_generate_coverage_report(void) {
     printf("Generating coverage report...\n");
     printf("============================================================\n");
 
-    /* Flush coverage data - use weak symbol to avoid link errors */
-    void __gcov_flush(void) __attribute__((weak));
-    if (__gcov_flush) {
-        __gcov_flush();
+    /* Flush coverage data - use dlsym to avoid link errors when not compiled with coverage */
+    typedef void (*gcov_flush_fn)(void);
+    gcov_flush_fn flush_fn = (gcov_flush_fn)dlsym(RTLD_DEFAULT, "__gcov_flush");
+    if (flush_fn) {
+        flush_fn();
     }
 
     /* Run gcov on source files */
