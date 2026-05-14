@@ -71,7 +71,7 @@ target_include_directories(finkit_codec_static
 )
 
 # Link platform and math library
-target_link_libraries(finkit_codec_static PUBLIC finkit_platform_static m)
+target_link_libraries(finkit_codec_static PUBLIC finkit::platform m)
 
 # Create alias
 add_library(finkit::codec ALIAS finkit_codec_static)

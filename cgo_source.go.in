@@ -7,8 +7,11 @@
 package codec
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/include -I${SRCDIR}/modules/platform/include -I${SRCDIR}/codec-c -I${SRCDIR}/modules/platform/src -I${SRCDIR}/modules/platform/third_party/gmp -I${SRCDIR}/modules/platform/third_party/mpfr/src -O2 -Wall -std=c11 -D_POSIX_C_SOURCE=200112L -mavx2 -mfma
-#cgo LDFLAGS: ${SRCDIR}/modules/platform/build/linux_amd64/third_party/mpfr/libmpfr.a ${SRCDIR}/modules/platform/build/linux_amd64/third_party/gmp/libgmp.a -lm
+#cgo CFLAGS: -I${SRCDIR}/include
+#cgo CFLAGS: -I${SRCDIR}/modules/platform/include
+#cgo CFLAGS: -I${SRCDIR}/codec-c
+#cgo CFLAGS: -I${SRCDIR}/modules/platform/src -O2 -Wall -std=c11 -D_POSIX_C_SOURCE=200112L -mavx2 -mfma
+#cgo LDFLAGS: ${SRCDIR}/modules/platform/build/linux_amd64/libfinkit_platform_static.a -lm -lgcov
 
 
 #include "codec.h"
