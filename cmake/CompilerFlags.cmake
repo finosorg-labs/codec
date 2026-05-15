@@ -13,3 +13,10 @@ add_compile_options(-Wall -Wextra -Wpedantic -ffp-contract=off)
 if(CMAKE_C_COMPILER_ID MATCHES "Clang")
     add_compile_options(-Wno-gnu-zero-variadic-macro-arguments)
 endif()
+
+# Coverage flags
+if(FC_ENABLE_COVERAGE)
+    message(STATUS "Enabling code coverage")
+    add_compile_options(-fprofile-arcs -ftest-coverage -O0 -g)
+    add_link_options(-fprofile-arcs -ftest-coverage)
+endif()

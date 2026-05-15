@@ -12,7 +12,7 @@ package codec
 #cgo CFLAGS: -I${SRCDIR}/modules/platform/third_party/gmp
 #cgo CFLAGS: -I${SRCDIR}/modules/platform/third_party/mpfr/src
 #cgo CFLAGS: -I${SRCDIR}/codec-c
-#cgo CFLAGS: -I${SRCDIR}/modules/platform/src -O2 -Wall -std=c11 
+#cgo CFLAGS: -I${SRCDIR}/modules/platform/src -O2 -Wall -std=c11 -mavx2 -mfma
 #cgo linux CFLAGS: -D_POSIX_C_SOURCE=200112L
 #cgo linux LDFLAGS: ${SRCDIR}/modules/platform/build/linux_amd64/libfinkit_platform_static.a -lm -lgcov
 #cgo darwin,arm64 LDFLAGS: ${SRCDIR}/modules/platform/build/darwin_arm64/libfinkit_platform_static.a -lm

@@ -353,9 +353,13 @@ int fc_test_generate_coverage_report(void) {
 
     /* Flush coverage data - use dlsym to avoid link errors when not compiled with coverage */
     typedef void (*gcov_flush_fn)(void);
-    gcov_flush_fn flush_fn = (gcov_flush_fn)dlsym(RTLD_DEFAULT, "__gcov_flush");
-    if (flush_fn) {
-        flush_fn();
+    union {
+        void *obj;
+        gcov_flush_fn fn;
+    } flush_ptr;
+    flush_ptr.obj = dlsym(RTLD_DEFAULT, "__gcov_flush");
+    if (flush_ptr.fn) {
+        flush_ptr.fn();
     }
 
     /* Run gcov on source files */

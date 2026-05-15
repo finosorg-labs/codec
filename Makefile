@@ -49,6 +49,13 @@ LINUX_THIRD_PARTY_DIR   := $(LINUX_BUILD_DIR)/third_party
 WINDOWS_THIRD_PARTY_DIR := $(WINDOWS_BUILD_DIR)/third_party
 MACOS_THIRD_PARTY_DIR := $(MACOS_BUILD_DIR)/third_party
 
+COVERAGE_CONFIG := -G Ninja \
+	-B $(LINUX_BUILD_DIR) \
+	-DCMAKE_BUILD_TYPE=Debug \
+	-DFC_BUILD_TESTS=ON \
+	-DFC_BUILD_BENCHMARKS=OFF \
+	-DFC_ENABLE_COVERAGE=ON
+
 LINUX_CONFIG := -G Ninja \
 	-B $(LINUX_BUILD_DIR) \
 	-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
@@ -115,16 +122,11 @@ go:
 	@CGO_CFLAGS_ALLOW="-m(avx2|avx512f|avx512dq|fma|sse4\.2)" go build -tags lib ./...
 
 test: linux
-	@echo "==> Building with coverage flags"
-	@BUILD_TYPE=Debug $(CMAKE) -B $(LINUX_BUILD_DIR) \
-		-G Ninja \
-		-DCMAKE_BUILD_TYPE=Debug \
-		-DCMAKE_C_FLAGS="-fprofile-arcs -ftest-coverage -O0" \
-		-DFC_BUILD_TESTS=ON \
-		-DFC_BUILD_BENCHMARKS=OFF >/dev/null 2>&1 || true
-	@$(CMAKE) --build $(LINUX_BUILD_DIR) --target codec_tests --parallel
+	@echo "==> Rebuilding with coverage enabled"
+	@$(CMAKE) $(COVERAGE_CONFIG)
+	@$(CMAKE) --build $(LINUX_BUILD_DIR) --parallel
 	@echo "==> Running C tests with coverage"
-	@bash scripts/test_coverage.sh $(LINUX_BUILD_DIR) || true
+	@bash scripts/test_coverage.sh $(LINUX_BUILD_DIR)
 	@echo ""
 	@echo "==> Running Go tests"
 	@FC_BUILD_MODE=source CGO_CFLAGS_ALLOW="-m(avx2|avx512f|avx512dq|fma|sse4\.2)" go test ./... -v
