@@ -154,6 +154,13 @@ void fc_bench_run(
     fc_bench_result_t* result
 );
 
+/**
+ * @brief Print benchmark table header
+ *
+ * Call this once before running a series of benchmarks to print column headers.
+ */
+void fc_bench_print_header(void);
+
 /*
  * Convenience macros for simple benchmarks
 */
