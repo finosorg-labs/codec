@@ -16,7 +16,8 @@ target_include_directories(bench_framework
 
 target_link_libraries(bench_framework
     PUBLIC
-        finkit_codec_static
+        finkit_codec_static_base
+        finkit::platform
 )
 
 # Benchmark executable
@@ -30,7 +31,8 @@ add_executable(codec_benchmarks
 target_link_libraries(codec_benchmarks
     PRIVATE
         bench_framework
-        finkit_codec_static
+        finkit_codec_static_base
+        finkit::platform
         m
 )
 

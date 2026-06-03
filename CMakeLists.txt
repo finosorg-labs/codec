@@ -85,29 +85,112 @@ elseif(FC_SIMD_LEVEL STREQUAL "SSE42")
     set_source_files_properties(codec-c/fix_codec.c PROPERTIES COMPILE_FLAGS "${FC_SSE42_FLAGS}")
 endif()
 
-# Create static library
-add_library(finkit_codec_static STATIC $<TARGET_OBJECTS:finkit_codec>)
-target_include_directories(finkit_codec_static
+# Create base static library (without platform)
+add_library(finkit_codec_static_base STATIC $<TARGET_OBJECTS:finkit_codec>)
+target_include_directories(finkit_codec_static_base
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
 )
 
-# Link platform and math library
-target_link_libraries(finkit_codec_static PUBLIC finkit::platform m)
+# Determine codec build directory
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+      set(CODEC_BUILD_DIR "darwin_arm64")
+    else()
+        set(CODEC_BUILD_DIR "darwin_x86_64")
+    endif()
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(CODEC_BUILD_DIR "linux_amd64")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    set(CODEC_BUILD_DIR "windows_amd64")
+endif()
+
+# Merge static libraries into a single library
+set(MERGED_LIB_PATH ${CMAKE_CURRENT_SOURCE_DIR}/build/${CODEC_BUILD_DIR}/libfinkit_codec_static.a)
+set(PLATFORM_LIB_PATH "${PLATFORM_BUILD_DIR}/libfinkit_platform_static.a")
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    # Windows: use lib.exe to merge libraries
+    add_custom_command(
+        OUTPUT ${MERGED_LIB_PATH}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_SOURCE_DIR}/build/${CODEC_BUILD_DIR}
+        COMMAND lib.exe /OUT:${MERGED_LIB_PATH}
+            $<TARGET_FILE:finkit_codec_static_base>
+         ${PLATFORM_LIB_PATH}
+        DEPENDS finkit_codec_static_base ${PLATFORM_LIB_PATH}
+        COMMENT "Merging static libraries into ${MERGED_LIB_PATH}"
+     VERBATIM
+    )
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    # macOS: use libtool to merge libraries
+    add_custom_command(
+    OUTPUT ${MERGED_LIB_PATH}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_SOURCE_DIR}/build/${CODEC_BUILD_DIR}
+        COMMAND libtool -static -o ${MERGED_LIB_PATH}
+            $<TARGET_FILE:finkit_codec_static_base>
+            ${PLATFORM_LIB_PATH}
+            2>&1 | grep -v "warning duplicate member name" || true
+        DEPENDS finkit_codec_static_base ${PLATFORM_LIB_PATH}
+        COMMENT "Merging static libraries into ${MERGED_LIB_PATH}"
+        VERBATIM
+    )
+else()
+    # Linux: use ar with MRI script to merge libraries
+    set(MRI_SCRIPT ${CMAKE_CURRENT_BINARY_DIR}/merge_libs.mri)
+    file(GENERATE OUTPUT ${MRI_SCRIPT} CONTENT
+"CREATE ${MERGED_LIB_PATH}
+ADDLIB $<TARGET_FILE:finkit_codec_static_base>
+ADDLIB ${PLATFORM_LIB_PATH}
+SAVE
+END
+")
+
+    add_custom_command(
+        OUTPUT ${MERGED_LIB_PATH}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_SOURCE_DIR}/build/${CODEC_BUILD_DIR}
+        COMMAND ${CMAKE_AR} -M < ${MRI_SCRIPT}
+        DEPENDS finkit_codec_static_base ${PLATFORM_LIB_PATH} ${MRI_SCRIPT}
+      COMMENT "Merging static libraries into ${MERGED_LIB_PATH}"
+      VERBATIM
+    )
+endif()
+
+# Create custom target to trigger the merge
+add_custom_target(finkit_codec_static ALL
+    DEPENDS ${MERGED_LIB_PATH}
+    COMMAND ${CMAKE_COMMAND} -E echo "Merged library created at: ${MERGED_LIB_PATH}"
+)
+
+# Create interface library for linking
+add_library(finkit_codec_static_interface INTERFACE)
+target_include_directories(finkit_codec_static_interface
+    INTERFACE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+     $<INSTALL_INTERFACE:include>
+)
+target_link_libraries(finkit_codec_static_interface
+    INTERFACE
+        m
+      ${MERGED_LIB_PATH}
+)
 
 # Create alias
-add_library(finkit::codec ALIAS finkit_codec_static)
+add_library(finkit::codec ALIAS finkit_codec_static_interface)
 
-# Install
-install(TARGETS finkit_codec_static
-    EXPORT finkit-codec-targets
-    ARCHIVE DESTINATION lib
+# Install merged static library
+install(FILES ${MERGED_LIB_PATH}
+    DESTINATION lib
 )
 
 install(DIRECTORY include/
     DESTINATION include/codec
     FILES_MATCHING PATTERN "*.h"
+)
+
+# Install interface library target
+install(TARGETS finkit_codec_static_interface
+    EXPORT finkit-codec-targets
 )
 
 install(EXPORT finkit-codec-targets

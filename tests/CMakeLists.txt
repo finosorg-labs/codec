@@ -13,7 +13,8 @@ add_executable(codec_tests
 # Link with codec library
 target_link_libraries(codec_tests
     PRIVATE
-        finkit_codec_static
+        finkit_codec_static_base
+        finkit::platform
         m
 )
 
