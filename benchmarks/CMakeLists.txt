@@ -14,12 +14,6 @@ target_include_directories(bench_framework
         ${CMAKE_SOURCE_DIR}/modules/platform/include
 )
 
-target_link_libraries(bench_framework
-    PUBLIC
-        finkit_codec_static_base
-        finkit::platform
-)
-
 # Benchmark executable
 add_executable(codec_benchmarks
     bench_main.c
@@ -27,12 +21,11 @@ add_executable(codec_benchmarks
     bench_fix_codec.c
 )
 
-# Link with benchmark framework and codec library
+# Link with benchmark framework and merged codec library
 target_link_libraries(codec_benchmarks
     PRIVATE
         bench_framework
-        finkit_codec_static_base
-        finkit::platform
+        finkit_codec_static_interface
         m
 )
 

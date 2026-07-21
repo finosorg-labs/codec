@@ -4,9 +4,6 @@ project(finkit-codec VERSION 1.0.0 LANGUAGES C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-# Option to skip library merging for faster QA/test/bench builds
-option(FC_SKIP_LIBRARY_MERGE "Skip library deduplication merge (faster builds for testing)" OFF)
-
 # Include SIMD detection and compiler flags
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/DetectSIMD.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/CompilerFlags.cmake)
@@ -34,34 +31,6 @@ configure_file(
     @ONLY
 )
 
-# Use prebuilt platform library
-if(NOT TARGET finkit::platform)
-    # Detect platform
-    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-        if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
-            set(PLATFORM_BUILD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/modules/platform/build/darwin_arm64")
-        else()
-            set(PLATFORM_BUILD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/modules/platform/build/darwin_x86_64")
-        endif()
-    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        set(PLATFORM_BUILD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/modules/platform/build/linux_amd64")
-    elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-        set(PLATFORM_BUILD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/modules/platform/build/windows_amd64")
-    else()
-        message(FATAL_ERROR "Unsupported platform: ${CMAKE_SYSTEM_NAME}")
-    endif()
-
-    # Import prebuilt platform library
-    add_library(finkit_platform_static STATIC IMPORTED)
-    set_target_properties(finkit_platform_static PROPERTIES
-        IMPORTED_LOCATION "${PLATFORM_BUILD_DIR}/libfinkit_platform_static.a"
-    )
-    target_include_directories(finkit_platform_static INTERFACE
-        "${CMAKE_CURRENT_SOURCE_DIR}/modules/platform/include"
-    )
-    add_library(finkit::platform ALIAS finkit_platform_static)
-endif()
-
 # Codec module sources
 set(CODEC_SOURCES
     codec-c/fix_codec.c
@@ -78,15 +47,6 @@ target_include_directories(finkit_codec
 )
 
 target_compile_definitions(finkit_codec PRIVATE FC_STATIC_BUILD)
-
-# Set compile flags for SIMD variants based on detected level
-if(FC_SIMD_LEVEL STREQUAL "AVX512")
-    set_source_files_properties(codec-c/fix_codec.c PROPERTIES COMPILE_FLAGS "${FC_AVX512_FLAGS}")
-elseif(FC_SIMD_LEVEL STREQUAL "AVX2")
-    set_source_files_properties(codec-c/fix_codec.c PROPERTIES COMPILE_FLAGS "${FC_AVX2_FLAGS}")
-elseif(FC_SIMD_LEVEL STREQUAL "SSE42")
-    set_source_files_properties(codec-c/fix_codec.c PROPERTIES COMPILE_FLAGS "${FC_SSE42_FLAGS}")
-endif()
 
 # Create base static library (without platform)
 add_library(finkit_codec_static_base STATIC $<TARGET_OBJECTS:finkit_codec>)
@@ -110,64 +70,44 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
 endif()
 
 # Merge static libraries with deduplication
-set(MERGED_LIB_PATH ${CMAKE_CURRENT_SOURCE_DIR}/build/${CODEC_BUILD_DIR}/libfinkit_codec_static.a)
-set(PLATFORM_LIB_PATH "${PLATFORM_BUILD_DIR}/libfinkit_platform_static.a")
-set(MERGE_TEMP_DIR ${CMAKE_CURRENT_BINARY_DIR}/merge_temp)
+# Use build-specific path to avoid conflicts between different build types (sanitizers)
+set(MERGED_LIB_PATH ${CMAKE_CURRENT_BINARY_DIR}/libfinkit_codec_static.a)
+# Fixed path for Go cgo bindings
+set(FINAL_LIB_PATH ${CMAKE_CURRENT_SOURCE_DIR}/build/${CODEC_BUILD_DIR}/libfinkit_codec_static.a)
 
-if(FC_SKIP_LIBRARY_MERGE)
-    # Skip merge: just use the base library (faster for testing)
-    message(STATUS "Skipping library merge (FC_SKIP_LIBRARY_MERGE=ON)")
-    add_custom_command(
-        OUTPUT ${MERGED_LIB_PATH}
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_SOURCE_DIR}/build/${CODEC_BUILD_DIR}
-        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:finkit_codec_static_base> ${MERGED_LIB_PATH}
-        DEPENDS finkit_codec_static_base
-        COMMENT "Copying base library to ${MERGED_LIB_PATH}"
-        VERBATIM
-    )
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    # Windows: use lib.exe to merge libraries (handles duplicates properly)
-    add_custom_command(
-        OUTPUT ${MERGED_LIB_PATH}
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_SOURCE_DIR}/build/${CODEC_BUILD_DIR}
-        COMMAND lib.exe /OUT:${MERGED_LIB_PATH}
-            $<TARGET_FILE:finkit_codec_static_base>
-            ${PLATFORM_LIB_PATH}
-        DEPENDS finkit_codec_static_base ${PLATFORM_LIB_PATH}
-        COMMENT "Merging static libraries into ${MERGED_LIB_PATH}"
-        VERBATIM
-    )
+# Determine merge tool based on platform
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    set(MERGE_TOOL "lib.exe")
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-    # macOS: use libtool to merge libraries (handles duplicates properly)
-    add_custom_command(
-        OUTPUT ${MERGED_LIB_PATH}
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_SOURCE_DIR}/build/${CODEC_BUILD_DIR}
-        COMMAND libtool -static -o ${MERGED_LIB_PATH}
-            $<TARGET_FILE:finkit_codec_static_base>
-            ${PLATFORM_LIB_PATH}
-            2>&1 | grep -v "warning duplicate member name" || true
-        DEPENDS finkit_codec_static_base ${PLATFORM_LIB_PATH}
-        COMMENT "Merging static libraries into ${MERGED_LIB_PATH}"
-        VERBATIM
-    )
+    set(MERGE_TOOL "libtool")
 else()
-    # Linux: use MRI script to merge libraries (preserves duplicate object names)
-    set(MERGE_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/scripts/merge_libs.sh)
-
-    add_custom_command(
-        OUTPUT ${MERGED_LIB_PATH}
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_SOURCE_DIR}/build/${CODEC_BUILD_DIR}
-        COMMAND bash ${MERGE_SCRIPT} ${MERGED_LIB_PATH} ${CMAKE_AR} $<TARGET_FILE:finkit_codec_static_base> ${PLATFORM_LIB_PATH}
-        DEPENDS finkit_codec_static_base ${PLATFORM_LIB_PATH} ${MERGE_SCRIPT}
-        COMMENT "Merging static libraries into ${MERGED_LIB_PATH}"
-        VERBATIM
-    )
+    set(MERGE_TOOL "${CMAKE_AR}")
 endif()
+
+# Unified merge command for all platforms
+set(MERGE_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/scripts/merge_libs.sh)
+
+add_custom_command(
+    OUTPUT ${MERGED_LIB_PATH}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_SOURCE_DIR}/build/${CODEC_BUILD_DIR}
+    COMMAND bash ${MERGE_SCRIPT}
+        ${MERGED_LIB_PATH}
+        $<TARGET_FILE:finkit_codec_static_base>
+        ${MERGE_TOOL}
+        --mode=smart
+        --project-root=${CMAKE_CURRENT_SOURCE_DIR}
+        --build-subdir=${CODEC_BUILD_DIR}
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${MERGED_LIB_PATH} ${FINAL_LIB_PATH}
+    DEPENDS finkit_codec_static_base ${MERGE_SCRIPT}
+    COMMENT "Merging static libraries with smart deduplication"
+    VERBATIM
+)
 
 # Create custom target to trigger the merge
 add_custom_target(finkit_codec_static ALL
     DEPENDS ${MERGED_LIB_PATH}
     COMMAND ${CMAKE_COMMAND} -E echo "Merged library created at: ${MERGED_LIB_PATH}"
+    COMMAND ${CMAKE_COMMAND} -E echo "Final library for Go: ${FINAL_LIB_PATH}"
 )
 
 # Create interface library for linking

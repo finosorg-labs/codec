@@ -44,26 +44,12 @@ LINUX_ARTIFACT_DIR    := $(LINUX_BUILD_DIR)
 WINDOWS_ARTIFACT_DIR  := $(WINDOWS_BUILD_DIR)
 MACOS_ARTIFACT_DIR  := $(MACOS_BUILD_DIR)
 
-# Third-party library target paths
-LINUX_THIRD_PARTY_DIR   := $(LINUX_BUILD_DIR)/third_party
-WINDOWS_THIRD_PARTY_DIR := $(WINDOWS_BUILD_DIR)/third_party
-MACOS_THIRD_PARTY_DIR := $(MACOS_BUILD_DIR)/third_party
-
 COVERAGE_CONFIG := -G Ninja \
 	-B $(LINUX_BUILD_DIR) \
 	-DCMAKE_BUILD_TYPE=Debug \
 	-DFC_BUILD_TESTS=ON \
 	-DFC_BUILD_BENCHMARKS=OFF \
-	-DFC_ENABLE_COVERAGE=ON \
-	-DFC_SKIP_LIBRARY_MERGE=ON
-
-LINUX_CONFIG := -G Ninja \
-	-B $(LINUX_BUILD_DIR) \
-	-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
-	-DCMAKE_C_FLAGS="-fprofile-arcs -ftest-coverage" \
-	-DCMAKE_EXE_LINKER_FLAGS="-fprofile-arcs -ftest-coverage" \
-	-DFC_BUILD_TESTS=ON \
-	-DFC_BUILD_BENCHMARKS=$(shell [ "$(BUILD_TYPE)" = "Release" ] && echo ON || echo OFF)
+	-DFC_ENABLE_COVERAGE=ON
 
 .PHONY: all default linux windows macos go test bench clean verify help format
 .PHONY: qa qa-sanitizers qa-static
@@ -106,6 +92,8 @@ windows:
 		-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
 		-DCMAKE_TOOLCHAIN_FILE=$(TOOLCHAIN_DIR)/x86_64-w64-mingw32.cmake
 	@$(CMAKE) --build $(WINDOWS_BUILD_DIR) --parallel
+	@echo "==> Cleaning intermediate build artifacts"
+	@rm -f $(WINDOWS_BUILD_DIR)/libfinkit_codec_static_base.a
 
 macos:
 	@echo "==> Building Macos (native, $(BUILD_TYPE))"
@@ -139,7 +127,6 @@ bench:
 		-DCMAKE_BUILD_TYPE=Release \
 		-DFC_BUILD_TESTS=OFF \
 		-DFC_BUILD_BENCHMARKS=ON \
-		-DFC_SKIP_LIBRARY_MERGE=ON >/dev/null 2>&1 || true
 	@$(CMAKE) --build $(LINUX_BUILD_DIR) --parallel
 	@echo "==> Running C benchmarks"
 	@if [ -f $(LINUX_BUILD_DIR)/benchmarks/codec_benchmarks ]; then \
@@ -174,8 +161,7 @@ sanitizer-asan:
 		-DFC_BUILD_TESTS=ON \
 		-DFC_BUILD_BENCHMARKS=OFF \
 		-DFC_ENABLE_SANITIZERS=ON \
-		-DFC_SANITIZER_TYPE=address \
-		-DFC_SKIP_LIBRARY_MERGE=ON >/dev/null 2>&1 || true
+		-DFC_SANITIZER_TYPE=address >/dev/null 2>&1 || true
 	@$(CMAKE) --build build/sanitizer-asan --parallel
 	@echo "==> Running AddressSanitizer tests"
 	@cd build/sanitizer-asan && ctest --output-on-failure
@@ -188,8 +174,7 @@ sanitizer-usan:
 		-DFC_BUILD_TESTS=ON \
 		-DFC_BUILD_BENCHMARKS=OFF \
 		-DFC_ENABLE_SANITIZERS=ON \
-		-DFC_SANITIZER_TYPE=undefined \
-		-DFC_SKIP_LIBRARY_MERGE=ON >/dev/null 2>&1 || true
+		-DFC_SANITIZER_TYPE=undefined >/dev/null 2>&1 || true
 	@$(CMAKE) --build build/sanitizer-usan --parallel
 	@echo "==> Running UndefinedBehaviorSanitizer tests"
 	@cd build/sanitizer-usan && ctest --output-on-failure
@@ -202,8 +187,7 @@ sanitizer-tsan:
 		-DFC_BUILD_TESTS=ON \
 		-DFC_BUILD_BENCHMARKS=OFF \
 		-DFC_ENABLE_SANITIZERS=ON \
-		-DFC_SANITIZER_TYPE=thread \
-		-DFC_SKIP_LIBRARY_MERGE=ON >/dev/null 2>&1 || true
+		-DFC_SANITIZER_TYPE=thread >/dev/null 2>&1 || true
 	@$(CMAKE) --build build/sanitizer-tsan --parallel
 	@echo "==> Running ThreadSanitizer tests"
 	@cd build/sanitizer-tsan && ctest --output-on-failure || \
@@ -217,8 +201,7 @@ sanitizer-msan:
 		-DFC_BUILD_TESTS=ON \
 		-DFC_BUILD_BENCHMARKS=OFF \
 		-DFC_ENABLE_SANITIZERS=ON \
-		-DFC_SANITIZER_TYPE=memory \
-		-DFC_SKIP_LIBRARY_MERGE=ON >/dev/null 2>&1 || true
+		-DFC_SANITIZER_TYPE=memory >/dev/null 2>&1 || true
 	@$(CMAKE) --build build/sanitizer-msan --parallel
 	@echo "==> Running MemorySanitizer tests"
 	@cd build/sanitizer-msan && ctest --output-on-failure

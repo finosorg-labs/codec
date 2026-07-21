@@ -10,11 +10,10 @@ add_executable(codec_tests
     test_fix_codec.c
 )
 
-# Link with codec library
+# Link with merged codec library (includes all dependencies)
 target_link_libraries(codec_tests
     PRIVATE
-        finkit_codec_static_base
-        finkit::platform
+        finkit_codec_static_interface
         m
 )
 
