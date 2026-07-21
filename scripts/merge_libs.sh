@@ -124,7 +124,7 @@ case $MODE in
         ;;
 
     smart)
-        # Smart mode: intelligent deduplication based on dependency graph
+        # Smart mode: include all libraries, let ar handle deduplication at merge time
         if [ -z "$PROJECT_ROOT" ]; then
             echo "Error: --project-root required for smart mode"
             exit 1
@@ -139,55 +139,27 @@ case $MODE in
         declare -a current_modules
         parse_gitmodules "$GITMODULES" current_modules
 
-        echo "=== Smart merge mode (with deduplication) ==="
+        echo "=== Smart merge mode (library-level) ==="
         echo "Project modules: ${current_modules[@]}"
 
-        # Build dependency graph
-        declare -A module_deps
-
+        # Include all modules - platform must be first to provide base symbols
+        # Reorder: platform first, then others
+        declare -a ordered_modules
         for mod in "${current_modules[@]}"; do
-            submodule_gitmodules="${PROJECT_ROOT}/modules/${mod}/.gitmodules"
-            if [ -f "$submodule_gitmodules" ]; then
-                declare -a sub_deps
-                parse_gitmodules "$submodule_gitmodules" sub_deps
-
-                if [ ${#sub_deps[@]} -gt 0 ]; then
-                    echo "  $mod depends on: ${sub_deps[@]}"
-                    module_deps["$mod"]="${sub_deps[@]}"
-                fi
+            if [ "$mod" = "platform" ]; then
+                ordered_modules=("$mod" "${ordered_modules[@]}")
+            else
+                ordered_modules+=("$mod")
             fi
         done
 
-        # Determine which modules to include (exclude transitive dependencies)
-        declare -a modules_to_include
-
-        for mod in "${current_modules[@]}"; do
-            is_dependency=0
-
-            # Check if this module is a dependency of any other module
-            for other_mod in "${current_modules[@]}"; do
-                if [ "$mod" != "$other_mod" ] && [ -n "${module_deps[$other_mod]}" ]; then
-                    if echo "${module_deps[$other_mod]}" | grep -q "\b$mod\b"; then
-                        is_dependency=1
-                        echo "  Skipping $mod (included in $other_mod)"
-                        break
-                    fi
-                fi
-            done
-
-            if [ $is_dependency -eq 0 ]; then
-                modules_to_include+=("$mod")
-            fi
-        done
-
-        echo "Modules after deduplication: ${modules_to_include[@]}"
-
-        for mod in "${modules_to_include[@]}"; do
+        for mod in "${ordered_modules[@]}"; do
             lib_file="${PROJECT_ROOT}/modules/${mod}/build/${BUILD_SUBDIR}/libfinkit_${mod}_static.a"
             if [ -f "$lib_file" ]; then
                 libs_to_merge+=("$lib_file")
+                echo "  Including: $mod"
             else
-                echo "Warning: Library not found: $lib_file"
+                echo "  Warning: Library not found for $mod"
             fi
         done
         ;;
@@ -198,19 +170,9 @@ case $MODE in
         ;;
 esac
 
-# Create MRI script
-MRI_SCRIPT=$(mktemp)
-trap "rm -f $MRI_SCRIPT" EXIT
-
-echo "CREATE $OUTPUT_LIB" > "$MRI_SCRIPT"
-echo "ADDLIB $BASE_LIB" >> "$MRI_SCRIPT"
-
-for lib in "${libs_to_merge[@]}"; do
-    echo "ADDLIB $lib" >> "$MRI_SCRIPT"
-done
-
-echo "SAVE" >> "$MRI_SCRIPT"
-echo "END" >> "$MRI_SCRIPT"
+# Extract and deduplicate objects
+TEMP_DIR=$(mktemp -d)
+trap "rm -rf $TEMP_DIR" EXIT
 
 echo ""
 echo "=== Final merge order ==="
@@ -218,7 +180,7 @@ echo "1. Base: $(basename $BASE_LIB)"
 i=2
 for lib in "${libs_to_merge[@]}"; do
     echo "$i. $(basename $lib)"
-    ((i++))
+    i=$((i + 1))
 done
 
 # Execute based on tool type
@@ -235,10 +197,24 @@ elif [[ "$AR_CMD" == *"libtool"* ]]; then
     "$AR_CMD" -static -o "$OUTPUT_LIB" "$BASE_LIB" "${libs_to_merge[@]}" 2>&1 | grep -v "warning duplicate member name" || true
 
 else
-    # Linux/Unix: ar with MRI script
+    # Linux/Unix: use MRI script for simple merge
     echo ""
     echo "Using ar with MRI script..."
+
+    # Create MRI script
+    MRI_SCRIPT=$(mktemp)
+    echo "CREATE $OUTPUT_LIB" > "$MRI_SCRIPT"
+    echo "ADDLIB $BASE_LIB" >> "$MRI_SCRIPT"
+
+    for lib in "${libs_to_merge[@]}"; do
+        echo "ADDLIB $lib" >> "$MRI_SCRIPT"
+    done
+
+    echo "SAVE" >> "$MRI_SCRIPT"
+    echo "END" >> "$MRI_SCRIPT"
+
     "$AR_CMD" -M < "$MRI_SCRIPT"
+    rm -f "$MRI_SCRIPT"
 fi
 
 object_count=$(ar t "$OUTPUT_LIB" 2>/dev/null | wc -l || echo "N/A")
