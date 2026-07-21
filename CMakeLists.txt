@@ -152,7 +152,7 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     )
 else()
     # Linux: use MRI script to merge libraries (preserves duplicate object names)
-    set(MERGE_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/cmake/merge_libs.sh)
+    set(MERGE_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/scripts/merge_libs.sh)
 
     add_custom_command(
         OUTPUT ${MERGED_LIB_PATH}
