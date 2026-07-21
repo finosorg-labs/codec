@@ -4,6 +4,9 @@ project(finkit-codec VERSION 1.0.0 LANGUAGES C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+# Option to skip library merging for faster QA/test/bench builds
+option(FC_SKIP_LIBRARY_MERGE "Skip library deduplication merge (faster builds for testing)" OFF)
+
 # Include SIMD detection and compiler flags
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/DetectSIMD.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/CompilerFlags.cmake)
@@ -106,26 +109,38 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     set(CODEC_BUILD_DIR "windows_amd64")
 endif()
 
-# Merge static libraries into a single library
+# Merge static libraries with deduplication
 set(MERGED_LIB_PATH ${CMAKE_CURRENT_SOURCE_DIR}/build/${CODEC_BUILD_DIR}/libfinkit_codec_static.a)
 set(PLATFORM_LIB_PATH "${PLATFORM_BUILD_DIR}/libfinkit_platform_static.a")
+set(MERGE_TEMP_DIR ${CMAKE_CURRENT_BINARY_DIR}/merge_temp)
 
-if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    # Windows: use lib.exe to merge libraries
+if(FC_SKIP_LIBRARY_MERGE)
+    # Skip merge: just use the base library (faster for testing)
+    message(STATUS "Skipping library merge (FC_SKIP_LIBRARY_MERGE=ON)")
+    add_custom_command(
+        OUTPUT ${MERGED_LIB_PATH}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_SOURCE_DIR}/build/${CODEC_BUILD_DIR}
+        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:finkit_codec_static_base> ${MERGED_LIB_PATH}
+        DEPENDS finkit_codec_static_base
+        COMMENT "Copying base library to ${MERGED_LIB_PATH}"
+        VERBATIM
+    )
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    # Windows: use lib.exe to merge libraries (handles duplicates properly)
     add_custom_command(
         OUTPUT ${MERGED_LIB_PATH}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_SOURCE_DIR}/build/${CODEC_BUILD_DIR}
         COMMAND lib.exe /OUT:${MERGED_LIB_PATH}
             $<TARGET_FILE:finkit_codec_static_base>
-         ${PLATFORM_LIB_PATH}
+            ${PLATFORM_LIB_PATH}
         DEPENDS finkit_codec_static_base ${PLATFORM_LIB_PATH}
         COMMENT "Merging static libraries into ${MERGED_LIB_PATH}"
-     VERBATIM
+        VERBATIM
     )
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-    # macOS: use libtool to merge libraries
+    # macOS: use libtool to merge libraries (handles duplicates properly)
     add_custom_command(
-    OUTPUT ${MERGED_LIB_PATH}
+        OUTPUT ${MERGED_LIB_PATH}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_SOURCE_DIR}/build/${CODEC_BUILD_DIR}
         COMMAND libtool -static -o ${MERGED_LIB_PATH}
             $<TARGET_FILE:finkit_codec_static_base>
@@ -136,23 +151,16 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
         VERBATIM
     )
 else()
-    # Linux: use ar with MRI script to merge libraries
-    set(MRI_SCRIPT ${CMAKE_CURRENT_BINARY_DIR}/merge_libs.mri)
-    file(GENERATE OUTPUT ${MRI_SCRIPT} CONTENT
-"CREATE ${MERGED_LIB_PATH}
-ADDLIB $<TARGET_FILE:finkit_codec_static_base>
-ADDLIB ${PLATFORM_LIB_PATH}
-SAVE
-END
-")
+    # Linux: use MRI script to merge libraries (preserves duplicate object names)
+    set(MERGE_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/cmake/merge_libs.sh)
 
     add_custom_command(
         OUTPUT ${MERGED_LIB_PATH}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_SOURCE_DIR}/build/${CODEC_BUILD_DIR}
-        COMMAND ${CMAKE_AR} -M < ${MRI_SCRIPT}
-        DEPENDS finkit_codec_static_base ${PLATFORM_LIB_PATH} ${MRI_SCRIPT}
-      COMMENT "Merging static libraries into ${MERGED_LIB_PATH}"
-      VERBATIM
+        COMMAND bash ${MERGE_SCRIPT} ${MERGED_LIB_PATH} ${CMAKE_AR} $<TARGET_FILE:finkit_codec_static_base> ${PLATFORM_LIB_PATH}
+        DEPENDS finkit_codec_static_base ${PLATFORM_LIB_PATH} ${MERGE_SCRIPT}
+        COMMENT "Merging static libraries into ${MERGED_LIB_PATH}"
+        VERBATIM
     )
 endif()
 

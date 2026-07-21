@@ -54,7 +54,8 @@ COVERAGE_CONFIG := -G Ninja \
 	-DCMAKE_BUILD_TYPE=Debug \
 	-DFC_BUILD_TESTS=ON \
 	-DFC_BUILD_BENCHMARKS=OFF \
-	-DFC_ENABLE_COVERAGE=ON
+	-DFC_ENABLE_COVERAGE=ON \
+	-DFC_SKIP_LIBRARY_MERGE=ON
 
 LINUX_CONFIG := -G Ninja \
 	-B $(LINUX_BUILD_DIR) \
@@ -137,7 +138,8 @@ bench:
 		-G Ninja \
 		-DCMAKE_BUILD_TYPE=Release \
 		-DFC_BUILD_TESTS=OFF \
-		-DFC_BUILD_BENCHMARKS=ON >/dev/null 2>&1 || true
+		-DFC_BUILD_BENCHMARKS=ON \
+		-DFC_SKIP_LIBRARY_MERGE=ON >/dev/null 2>&1 || true
 	@$(CMAKE) --build $(LINUX_BUILD_DIR) --parallel
 	@echo "==> Running C benchmarks"
 	@if [ -f $(LINUX_BUILD_DIR)/benchmarks/codec_benchmarks ]; then \
@@ -172,7 +174,8 @@ sanitizer-asan:
 		-DFC_BUILD_TESTS=ON \
 		-DFC_BUILD_BENCHMARKS=OFF \
 		-DFC_ENABLE_SANITIZERS=ON \
-		-DFC_SANITIZER_TYPE=address >/dev/null 2>&1 || true
+		-DFC_SANITIZER_TYPE=address \
+		-DFC_SKIP_LIBRARY_MERGE=ON >/dev/null 2>&1 || true
 	@$(CMAKE) --build build/sanitizer-asan --parallel
 	@echo "==> Running AddressSanitizer tests"
 	@cd build/sanitizer-asan && ctest --output-on-failure
@@ -185,7 +188,8 @@ sanitizer-usan:
 		-DFC_BUILD_TESTS=ON \
 		-DFC_BUILD_BENCHMARKS=OFF \
 		-DFC_ENABLE_SANITIZERS=ON \
-		-DFC_SANITIZER_TYPE=undefined >/dev/null 2>&1 || true
+		-DFC_SANITIZER_TYPE=undefined \
+		-DFC_SKIP_LIBRARY_MERGE=ON >/dev/null 2>&1 || true
 	@$(CMAKE) --build build/sanitizer-usan --parallel
 	@echo "==> Running UndefinedBehaviorSanitizer tests"
 	@cd build/sanitizer-usan && ctest --output-on-failure
@@ -198,7 +202,8 @@ sanitizer-tsan:
 		-DFC_BUILD_TESTS=ON \
 		-DFC_BUILD_BENCHMARKS=OFF \
 		-DFC_ENABLE_SANITIZERS=ON \
-		-DFC_SANITIZER_TYPE=thread >/dev/null 2>&1 || true
+		-DFC_SANITIZER_TYPE=thread \
+		-DFC_SKIP_LIBRARY_MERGE=ON >/dev/null 2>&1 || true
 	@$(CMAKE) --build build/sanitizer-tsan --parallel
 	@echo "==> Running ThreadSanitizer tests"
 	@cd build/sanitizer-tsan && ctest --output-on-failure || \
@@ -212,7 +217,8 @@ sanitizer-msan:
 		-DFC_BUILD_TESTS=ON \
 		-DFC_BUILD_BENCHMARKS=OFF \
 		-DFC_ENABLE_SANITIZERS=ON \
-		-DFC_SANITIZER_TYPE=memory >/dev/null 2>&1 || true
+		-DFC_SANITIZER_TYPE=memory \
+		-DFC_SKIP_LIBRARY_MERGE=ON >/dev/null 2>&1 || true
 	@$(CMAKE) --build build/sanitizer-msan --parallel
 	@echo "==> Running MemorySanitizer tests"
 	@cd build/sanitizer-msan && ctest --output-on-failure
@@ -256,23 +262,59 @@ clean:
 	@go clean -cache
 
 sync:
-	@echo "==> Syncing all submodules (init + remote update + restore tracked files)"
-	@echo "==> Step 1: Sync submodule URLs from .gitmodules to .git/config"
-	@git submodule sync --recursive
-	@echo "==> Step 2: Ensure submodules are registered in git index"
-	@git config -f .gitmodules --get-regexp '^submodule\..*\.path$$' | while read key path; do \
-		if [ ! -d "$$path/.git" ] && [ ! -f "$$path/.git" ]; then \
-			echo "  Restoring submodule: $$path"; \
-			submodule_name=$$(echo $$key | sed 's/^submodule\.\(.*\)\.path$$/\1/'); \
-			url=$$(git config -f .gitmodules --get "submodule.$$submodule_name.url"); \
-			git submodule add -f "$$url" "$$path" 2>/dev/null || true; \
-		fi; \
-	done
-	@echo "==> Step 3: Reset and clean submodule working trees"
-	@git submodule foreach --recursive 'git reset --hard && git clean -fd' || true
-	@echo "==> Step 4: Update all submodules to latest"
-	@git submodule update --init --remote --merge --recursive --force
-	@echo "==> Submodules synced successfully"
+	@echo "==> Syncing submodules recursively (partial clone: build + include only)"
+	@echo "==> Downloading to modules/ directory (flat structure)"
+	@mkdir -p modules
+	@bash -c 'set -e; \
+	clone_submodule() { \
+		local gitmodules_file=$$1; \
+		local base_path=$$2; \
+		git config -f $$gitmodules_file --get-regexp "^submodule\..*\.path$$" | while read key path; do \
+			submodule_name=$$(echo $$key | sed "s/^submodule\.\(.*\)\.path$$/\1/"); \
+			url=$$(git config -f $$gitmodules_file --get "submodule.$$submodule_name.url"); \
+			module_name=$$(basename $$url .git); \
+			cache_path="modules/$$module_name"; \
+			branch=$$(git config -f $$gitmodules_file --get "submodule.$$submodule_name.branch" 2>/dev/null || echo "main"); \
+			need_recurse=false; \
+			\
+			if [ -d "$$cache_path/.git" ]; then \
+				echo "  ↻ Checking $$module_name for updates"; \
+				cd $$cache_path; \
+				current_commit=$$(git rev-parse HEAD 2>/dev/null || echo "none"); \
+				git fetch --depth=1 origin $$branch 2>/dev/null || git fetch --depth=1 origin main 2>/dev/null || git fetch --depth=1 origin master 2>/dev/null; \
+				latest_commit=$$(git rev-parse FETCH_HEAD 2>/dev/null); \
+				if [ "$$current_commit" != "$$latest_commit" ]; then \
+					echo "    ⬆ Updating $$module_name"; \
+					git checkout FETCH_HEAD 2>/dev/null; \
+					need_recurse=true; \
+				else \
+					echo "    ✓ $$module_name is up to date"; \
+				fi; \
+				cd - > /dev/null; \
+			else \
+				echo "  ⬇ Cloning $$module_name to modules/ (sparse: build + include)"; \
+				rm -rf $$cache_path; \
+				mkdir -p $$cache_path; \
+				cd $$cache_path && \
+				git init && \
+				git remote add origin $$url && \
+				git config core.sparseCheckout true && \
+				git sparse-checkout init --no-cone && \
+				git sparse-checkout set "build/*" "include/*" ".gitmodules" && \
+				git fetch --depth=1 origin && \
+				git checkout $$branch 2>/dev/null || git checkout main 2>/dev/null || git checkout master; \
+				cd - > /dev/null; \
+				need_recurse=true; \
+			fi; \
+			\
+			if [ "$$need_recurse" = "true" ] && [ -f "$$cache_path/.gitmodules" ]; then \
+				echo "    Found nested submodules in $$module_name"; \
+				clone_submodule "$$cache_path/.gitmodules" ""; \
+			fi; \
+		done; \
+	}; \
+	clone_submodule ".gitmodules" ""'
+	@echo "==> Submodules synced successfully (build + include only, recursive)"
 
 help:
 	@echo "codec Makefile - Build and Test Targets"

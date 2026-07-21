@@ -13,22 +13,14 @@
 #ifndef FC_BENCH_FRAMEWORK_H
 #define FC_BENCH_FRAMEWORK_H
 
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdint.h>
-#include <stdbool.h>
 
 #include <platform.h>
 
-/*
- * Benchmark framework version
-*/
-
 #define FC_BENCH_VERSION "1.0.0"
-
-/*
- * Timing utilities
-*/
 
 /**
  * @brief High-resolution timestamp
@@ -62,10 +54,6 @@ uint64_t fc_bench_time_elapsed_ns(const fc_bench_time_t* start, const fc_bench_t
  */
 uint64_t fc_bench_get_timer_resolution_ns(void);
 
-/*
- * Benchmark result structure
-*/
-
 /**
  * @brief Statistics for a benchmark run
  */
@@ -75,7 +63,7 @@ typedef struct {
     double elapsed_ms;      /* total elapsed time */
     uint64_t iterations;    /* number of iterations */
     double ops_per_sec;     /* operations per second */
-    double throughput_gb_s;  /* gigabytes per second */
+    double throughput_gb_s; /* gigabytes per second */
     double gflops;          /* gigaflops (if applicable) */
     double mean_ns;         /* mean time per iteration */
     double stddev_ns;       /* standard deviation */
@@ -102,37 +90,71 @@ void fc_bench_result_print_csv(const fc_bench_result_t* result, FILE* fp);
  */
 double fc_bench_result_compare(const fc_bench_result_t* a, const fc_bench_result_t* b);
 
-/*
- * Benchmark runner
-*/
+/**
+ * @brief Calculate speedup ratio between two results
+ *
+ * @param baseline Baseline result
+ * @param optimized Optimized result
+ * @return Speedup ratio (baseline/optimized)
+ */
+double fc_bench_result_speedup(
+    const fc_bench_result_t* baseline,
+    const fc_bench_result_t* optimized
+);
+
+/**
+ * @brief Print comparison of two benchmark results
+ *
+ * @param name Comparison name
+ * @param baseline Baseline result
+ * @param optimized Optimized result
+ */
+void fc_bench_result_print_comparison(
+    const char* name,
+    const fc_bench_result_t* baseline,
+    const fc_bench_result_t* optimized
+);
+
+/**
+ * @brief Save benchmark result to file
+ *
+ * @param result Result to save
+ * @param filename Output filename
+ * @return 0 on success, non-zero on error
+ */
+int fc_bench_result_save(const fc_bench_result_t* result, const char* filename);
+
+/**
+ * @brief Load benchmark result from file
+ *
+ * @param result Output result structure
+ * @param filename Input filename
+ * @return 0 on success, non-zero on error
+ */
+int fc_bench_result_load(fc_bench_result_t* result, const char* filename);
 
 /**
  * @brief Benchmark configuration
  */
 typedef struct {
     const char* name;
-    size_t data_size;       /* Size of data being processed */
-    uint64_t min_iterations;    /* Minimum iterations to run */
-    uint64_t max_iterations;    /* Maximum iterations to run */
-    double min_time_ms;         /* Minimum total time to run */
-    double warmup_ms;          /* Warmup time before measurement */
-    int enable_stats;          /* Enable statistical analysis */
-    int quiet;                 /* Suppress output */
+    size_t data_size;        /* Size of data being processed */
+    uint64_t min_iterations; /* Minimum iterations to run */
+    uint64_t max_iterations; /* Maximum iterations to run */
+    double min_time_ms;      /* Minimum total time to run */
+    double warmup_ms;        /* Warmup time before measurement */
+    int enable_stats;        /* Enable statistical analysis */
+    int quiet;               /* Suppress output */
 } fc_bench_config_t;
 
 /**
  * @brief Default benchmark configuration
  */
-#define FC_BENCH_CONFIG_DEFAULT { \
-    .name = "benchmark", \
-    .data_size = 0, \
-    .min_iterations = 10, \
-    .max_iterations = 1000000, \
-    .min_time_ms = 100.0, \
-    .warmup_ms = 10.0, \
-    .enable_stats = 1, \
-    .quiet = 0 \
-}
+#define FC_BENCH_CONFIG_DEFAULT                                                                    \
+    {                                                                                              \
+        .name = "benchmark", .data_size = 0, .min_iterations = 10, .max_iterations = 1000000,      \
+        .min_time_ms = 100.0, .warmup_ms = 10.0, .enable_stats = 1, .quiet = 0                     \
+    }
 
 /**
  * @brief Benchmark function type
@@ -161,55 +183,55 @@ void fc_bench_run(
  */
 void fc_bench_print_header(void);
 
-/*
- * Convenience macros for simple benchmarks
-*/
-
 /**
  * @brief Simple benchmark with fixed iterations
  */
-#define FC_BENCH_SIMPLE(name, n_iterations, code) \
-    do { \
-        fc_bench_time_t _start, _end; \
-        _start = fc_bench_time_now(); \
-        for (int _i = 0; _i < (n_iterations); _i++) { \
-            code; \
-        } \
-        _end = fc_bench_time_now(); \
-        double _elapsed_ms = fc_bench_time_elapsed_ms(&_start, &_end); \
-        printf("%s: %.2f ms (%d iterations, %.2f ns/iter)\n", \
-               name, _elapsed_ms, n_iterations, \
-               _elapsed_ms * 1000000.0 / (n_iterations)); \
+#define FC_BENCH_SIMPLE(name, n_iterations, code)                                                  \
+    do {                                                                                           \
+        fc_bench_time_t _start, _end;                                                              \
+        _start = fc_bench_time_now();                                                              \
+        for (int _i = 0; _i < (n_iterations); _i++) {                                              \
+            code;                                                                                  \
+        }                                                                                          \
+        _end               = fc_bench_time_now();                                                  \
+        double _elapsed_ms = fc_bench_time_elapsed_ms(&_start, &_end);                             \
+        printf(                                                                                    \
+            "%s: %.2f ms (%d iterations, %.2f ns/iter)\n",                                         \
+            name,                                                                                  \
+            _elapsed_ms,                                                                           \
+            n_iterations,                                                                          \
+            _elapsed_ms * 1000000.0 / (n_iterations)                                               \
+        );                                                                                         \
     } while (0)
 
 /**
  * @brief Benchmark with auto-iteration adjustment
  */
-#define FC_BENCH_AUTO(name, code) \
-    do { \
-        fc_bench_time_t _start, _end; \
-        int _iterations = 1; \
-        _start = fc_bench_time_now(); \
-        code; \
-        _end = fc_bench_time_now(); \
-        double _elapsed_ms = fc_bench_time_elapsed_ms(&_start, &_end); \
-        if (_elapsed_ms < 10.0) { \
-            _iterations = (int)(10.0 / _elapsed_ms) + 1; \
-            _start = fc_bench_time_now(); \
-            for (int _i = 0; _i < _iterations; _i++) { \
-                code; \
-            } \
-            _end = fc_bench_time_now(); \
-            _elapsed_ms = fc_bench_time_elapsed_ms(&_start, &_end); \
-        } \
-        printf("%s: %.2f ms (%d iterations, %.2f ns/iter)\n", \
-               name, _elapsed_ms, _iterations, \
-               _elapsed_ms * 1000000.0 / (_iterations)); \
+#define FC_BENCH_AUTO(name, code)                                                                  \
+    do {                                                                                           \
+        fc_bench_time_t _start, _end;                                                              \
+        int _iterations = 1;                                                                       \
+        _start          = fc_bench_time_now();                                                     \
+        code;                                                                                      \
+        _end               = fc_bench_time_now();                                                  \
+        double _elapsed_ms = fc_bench_time_elapsed_ms(&_start, &_end);                             \
+        if (_elapsed_ms < 10.0) {                                                                  \
+            _iterations = (int) (10.0 / _elapsed_ms) + 1;                                          \
+            _start      = fc_bench_time_now();                                                     \
+            for (int _i = 0; _i < _iterations; _i++) {                                             \
+                code;                                                                              \
+            }                                                                                      \
+            _end        = fc_bench_time_now();                                                     \
+            _elapsed_ms = fc_bench_time_elapsed_ms(&_start, &_end);                                \
+        }                                                                                          \
+        printf(                                                                                    \
+            "%s: %.2f ms (%d iterations, %.2f ns/iter)\n",                                         \
+            name,                                                                                  \
+            _elapsed_ms,                                                                           \
+            _iterations,                                                                           \
+            _elapsed_ms * 1000000.0 / (_iterations)                                                \
+        );                                                                                         \
     } while (0)
-
-/*
- * Throughput and performance metrics
-*/
 
 /**
  * @brief Calculate throughput in GB/s
@@ -238,19 +260,17 @@ double fc_bench_gflops(double flops, double elapsed_ms);
  */
 double fc_bench_ops_per_sec(uint64_t ops, double elapsed_ms);
 
-/*
- * Statistical utilities
-*/
-
 /**
  * @brief Running statistics accumulator
  */
 typedef struct {
     uint64_t count;
     double mean;
-    double m2;        /* sum of squared differences */
+    double m2; /* sum of squared differences */
     double min;
     double max;
+    double* samples; /* for percentile calculation */
+    size_t capacity;
 } fc_bench_stats_t;
 
 /**
@@ -279,13 +299,28 @@ double fc_bench_stats_stddev(const fc_bench_stats_t* stats);
 double fc_bench_stats_variance(const fc_bench_stats_t* stats);
 
 /**
+ * @brief Get median value
+ */
+double fc_bench_stats_median(const fc_bench_stats_t* stats);
+
+/**
+ * @brief Get percentile value
+ *
+ * @param stats Statistics accumulator
+ * @param percentile Percentile to get (0-100)
+ * @return Percentile value
+ */
+double fc_bench_stats_percentile(const fc_bench_stats_t* stats, double percentile);
+
+/**
+ * @brief Free statistics resources
+ */
+void fc_bench_stats_free(fc_bench_stats_t* stats);
+
+/**
  * @brief Print statistics summary
  */
 void fc_bench_stats_print(const fc_bench_stats_t* stats, const char* name);
-
-/*
- * Memory bandwidth estimation
-*/
 
 /**
  * @brief Estimate memory bandwidth in GB/s
@@ -295,15 +330,7 @@ void fc_bench_stats_print(const fc_bench_stats_t* stats, const char* name);
  * @param elapsed_ms Elapsed time in milliseconds
  * @return Estimated bandwidth in GB/s
  */
-double fc_bench_mem_bandwidth_gb_s(
-    size_t bytes_read,
-    size_t bytes_written,
-    double elapsed_ms
-);
-
-/*
- * Benchmark suite management
-*/
+double fc_bench_mem_bandwidth_gb_s(size_t bytes_read, size_t bytes_written, double elapsed_ms);
 
 /**
  * @brief Benchmark suite structure
@@ -341,8 +368,74 @@ void fc_bench_set_verbose(int verbose);
 void fc_bench_init(void);
 
 /**
+ * @brief Initialize benchmark framework with command-line arguments
+ *
+ * @param argc Argument count
+ * @param argv Argument vector
+ */
+void fc_bench_init_with_args(int argc, char** argv);
+
+/**
+ * @brief Set filter pattern for benchmarks
+ *
+ * @param pattern Filter pattern (substring match)
+ */
+void fc_bench_set_filter(const char* pattern);
+
+/**
  * @brief Cleanup benchmark framework
  */
 void fc_bench_cleanup(void);
+
+/**
+ * @brief Enable automatic memory allocation tracking
+ *
+ * When enabled, tracks malloc/free calls during benchmark execution.
+ *
+ * @param enable 1 to enable, 0 to disable
+ */
+void fc_bench_track_allocations(int enable);
+
+/**
+ * @brief Get tracked allocation statistics
+ *
+ * @param bytes_per_op Output: bytes allocated per operation
+ * @param allocs_per_op Output: number of allocations per operation
+ */
+void fc_bench_get_allocation_stats(size_t* bytes_per_op, size_t* allocs_per_op);
+
+/**
+ * @brief Override SIMD level for benchmarking
+ *
+ * Allows benchmarking different SIMD implementations by forcing a specific level.
+ *
+ * @param level SIMD level to force (0=scalar, 1=SSE4.2, 2=AVX2, 3=AVX-512)
+ * @return Previous SIMD level
+ */
+int fc_bench_set_simd_level(int level);
+
+/**
+ * @brief Get current SIMD level
+ *
+ * @return Current SIMD level
+ */
+int fc_bench_get_simd_level(void);
+
+/**
+ * @brief Compare performance across SIMD levels
+ *
+ * Runs a benchmark at different SIMD levels and prints comparison.
+ *
+ * @param name Benchmark name
+ * @param config Benchmark configuration
+ * @param fn Benchmark function
+ * @param user_data User data
+ */
+void fc_bench_compare_simd(
+    const char* name,
+    const fc_bench_config_t* config,
+    fc_bench_fn fn,
+    void* user_data
+);
 
 #endif /* FC_BENCH_FRAMEWORK_H */
