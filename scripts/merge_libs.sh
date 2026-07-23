@@ -1,17 +1,16 @@
 #!/bin/bash
-# Universal static library merge script with intelligent dependency resolution
-# Supports three modes:
-#   1. Manual mode: explicitly list libraries to merge
-#   2. Auto mode: read from .gitmodules (include all)
-#   3. Smart mode: read from .gitmodules with intelligent deduplication (default)
+# Static library merge script with library-level deduplication
+# Merges base library with all its dependencies into a single library file
+#
+# Assumptions:
+#   - Each finkit module's static library already bundles its dependencies
+#   - Dependencies should not be added separately to avoid duplication
 #
 # Usage: merge_libs.sh <output_lib> <base_lib> <ar_command> [options]
 #
 # Options:
-#   --mode=manual|auto|smart    Merge mode (default: smart)
-#   --project-root=<path>       Project root directory (required for auto/smart mode)
+#   --project-root=<path>       Project root directory (required)
 #   --build-subdir=<name>       Build subdirectory name (default: linux_amd64)
-#   --libs=<lib1>,<lib2>,...    Libraries to merge (manual mode only)
 
 set -e
 
@@ -19,27 +18,17 @@ set -e
 OUTPUT_LIB=""
 BASE_LIB=""
 AR_CMD=""
-MODE="smart"
 PROJECT_ROOT=""
 BUILD_SUBDIR="linux_amd64"
-MANUAL_LIBS=()
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --mode=*)
-            MODE="${1#*=}"
-            shift
-            ;;
         --project-root=*)
             PROJECT_ROOT="${1#*=}"
             shift
             ;;
         --build-subdir=*)
             BUILD_SUBDIR="${1#*=}"
-            shift
-            ;;
-        --libs=*)
-            IFS=',' read -ra MANUAL_LIBS <<< "${1#*=}"
             shift
             ;;
         *)
@@ -58,7 +47,12 @@ done
 # Validate arguments
 if [ -z "$OUTPUT_LIB" ] || [ -z "$BASE_LIB" ] || [ -z "$AR_CMD" ]; then
     echo "Error: Missing required arguments"
-    echo "Usage: merge_libs.sh <output_lib> <base_lib> <ar_command> [options]"
+    echo "Usage: merge_libs.sh <output_lib> <base_lib> <ar_command> --project-root=<path> [--build-subdir=<name>]"
+    exit 1
+fi
+
+if [ -z "$PROJECT_ROOT" ]; then
+    echo "Error: --project-root required"
     exit 1
 fi
 
@@ -67,156 +61,145 @@ parse_gitmodules() {
     local gitmodules_file="$1"
     local -n result=$2
 
-    if [ ! -f "$gitmodules_file" ]; then
-        return
-    fi
+    [ ! -f "$gitmodules_file" ] && return
 
     while IFS= read -r line; do
         if [[ "$line" =~ path[[:space:]]*=[[:space:]]*(.+) ]]; then
-            submodule_path="${BASH_REMATCH[1]}"
-            submodule_path=$(echo "$submodule_path" | xargs)
-            submodule_name=$(basename "$submodule_path")
-            result+=("$submodule_name")
+            submodule_path=$(echo "${BASH_REMATCH[1]}" | tr -d '\r' | xargs)
+            result+=("$(basename "$submodule_path")")
         fi
     done < "$gitmodules_file"
 }
 
-declare -a libs_to_merge
+# Find library file for a module
+find_module_lib() {
+    local mod="$1"
+    local lib_name="libfinkit_${mod}_static.a"
 
-case $MODE in
-    manual)
-        # Manual mode: use explicitly provided libraries
-        if [ ${#MANUAL_LIBS[@]} -eq 0 ]; then
-            echo "Error: --libs required for manual mode"
-            exit 1
+    # Try build directory first (pre-built dependencies)
+    [ -f "${PROJECT_ROOT}/build/${BUILD_SUBDIR}/${lib_name}" ] && \
+        echo "${PROJECT_ROOT}/build/${BUILD_SUBDIR}/${lib_name}" && return
+
+    # Try modules directory (locally built submodules)
+    [ -f "${PROJECT_ROOT}/modules/${mod}/build/${BUILD_SUBDIR}/${lib_name}" ] && \
+        echo "${PROJECT_ROOT}/modules/${mod}/build/${BUILD_SUBDIR}/${lib_name}" && return
+
+    return 1
+}
+
+declare -a merge_order
+
+# Get current project name from base library
+CURRENT_PROJECT=""
+base_name=$(basename "$BASE_LIB")
+if [[ "$base_name" =~ libfinkit_([^_]+)_static ]]; then
+    CURRENT_PROJECT="${BASH_REMATCH[1]}"
+fi
+
+echo "=== Dependency-aware merge ==="
+[ -n "$CURRENT_PROJECT" ] && echo "Current project: $CURRENT_PROJECT"
+
+# Parse root .gitmodules
+GITMODULES="${PROJECT_ROOT}/.gitmodules"
+if [ ! -f "$GITMODULES" ]; then
+    echo "Warning: .gitmodules not found, merging base library only"
+else
+    declare -a root_modules
+    parse_gitmodules "$GITMODULES" root_modules
+    echo "Root modules: ${root_modules[@]}"
+
+    # Scan third_party directory for libraries
+    THIRD_PARTY_DIR="${PROJECT_ROOT}/build/${BUILD_SUBDIR}/third_party"
+    if [ -d "$THIRD_PARTY_DIR" ]; then
+        for lib_file in "$THIRD_PARTY_DIR"/*.a; do
+            [ -f "$lib_file" ] && merge_order+=("$lib_file")
+        done
+    fi
+
+    # Collect direct dependencies and build dependency graph
+    declare -A module_deps  # mod -> "dep1 dep2 ..."
+    declare -a candidates   # modules that might be added
+
+    for mod in "${root_modules[@]}"; do
+        [ "$mod" = "$CURRENT_PROJECT" ] && continue
+
+        lib_file=$(find_module_lib "$mod" || true)
+        if [ -n "$lib_file" ]; then
+            candidates+=("$mod")
+
+            # Check if this module has dependencies
+            mod_gitmodules="${PROJECT_ROOT}/modules/${mod}/.gitmodules"
+            if [ -f "$mod_gitmodules" ]; then
+                declare -a sub_deps
+                parse_gitmodules "$mod_gitmodules" sub_deps
+                if [ ${#sub_deps[@]} -gt 0 ]; then
+                    module_deps["$mod"]="${sub_deps[@]}"
+                fi
+            fi
         fi
-        libs_to_merge=("${MANUAL_LIBS[@]}")
-        echo "=== Manual merge mode ==="
-        ;;
+    done
 
-    auto)
-        # Auto mode: include all libraries from .gitmodules
-        if [ -z "$PROJECT_ROOT" ]; then
-            echo "Error: --project-root required for auto mode"
-            exit 1
-        fi
+    # Filter out modules that are dependencies of other modules
+    # If A depends on B, and both A and B are in candidates, only add A (since A bundles B)
+    for mod in "${candidates[@]}"; do
+        is_bundled=false
 
-        GITMODULES="${PROJECT_ROOT}/.gitmodules"
-        if [ ! -f "$GITMODULES" ]; then
-            echo "Error: .gitmodules not found at $GITMODULES"
-            exit 1
-        fi
-
-        declare -a modules
-        parse_gitmodules "$GITMODULES" modules
-
-        echo "=== Auto merge mode ==="
-        echo "Found modules: ${modules[@]}"
-
-        for mod in "${modules[@]}"; do
-            lib_file="${PROJECT_ROOT}/modules/${mod}/build/${BUILD_SUBDIR}/libfinkit_${mod}_static.a"
-            if [ -f "$lib_file" ]; then
-                libs_to_merge+=("$lib_file")
-            else
-                echo "Warning: Library not found: $lib_file"
+        # Check if this module is a dependency of any other candidate
+        for other_mod in "${candidates[@]}"; do
+            if [ "$mod" != "$other_mod" ] && [ -n "${module_deps[$other_mod]}" ]; then
+                # Check if mod is in other_mod's dependencies
+                for dep in ${module_deps[$other_mod]}; do
+                    if [ "$dep" = "$mod" ]; then
+                        echo "  Skipping $mod (bundled in $other_mod)"
+                        is_bundled=true
+                        break 2
+                    fi
+                done
             fi
         done
-        ;;
 
-    smart)
-        # Smart mode: include all libraries, let ar handle deduplication at merge time
-        if [ -z "$PROJECT_ROOT" ]; then
-            echo "Error: --project-root required for smart mode"
-            exit 1
+        if [ "$is_bundled" = false ]; then
+            lib_file=$(find_module_lib "$mod" || true)
+            [ -n "$lib_file" ] && merge_order+=("$lib_file")
         fi
+    done
+fi
 
-        GITMODULES="${PROJECT_ROOT}/.gitmodules"
-        if [ ! -f "$GITMODULES" ]; then
-            echo "Error: .gitmodules not found at $GITMODULES"
-            exit 1
-        fi
-
-        declare -a current_modules
-        parse_gitmodules "$GITMODULES" current_modules
-
-        echo "=== Smart merge mode (library-level) ==="
-        echo "Project modules: ${current_modules[@]}"
-
-        # Include all modules - platform must be first to provide base symbols
-        # Reorder: platform first, then others
-        declare -a ordered_modules
-        for mod in "${current_modules[@]}"; do
-            if [ "$mod" = "platform" ]; then
-                ordered_modules=("$mod" "${ordered_modules[@]}")
-            else
-                ordered_modules+=("$mod")
-            fi
-        done
-
-        for mod in "${ordered_modules[@]}"; do
-            lib_file="${PROJECT_ROOT}/modules/${mod}/build/${BUILD_SUBDIR}/libfinkit_${mod}_static.a"
-            if [ -f "$lib_file" ]; then
-                libs_to_merge+=("$lib_file")
-                echo "  Including: $mod"
-            else
-                echo "  Warning: Library not found for $mod"
-            fi
-        done
-        ;;
-
-    *)
-        echo "Error: Invalid mode '$MODE'. Use manual, auto, or smart."
-        exit 1
-        ;;
-esac
-
-# Extract and deduplicate objects
-TEMP_DIR=$(mktemp -d)
-trap "rm -rf $TEMP_DIR" EXIT
-
+# Display merge order
 echo ""
 echo "=== Final merge order ==="
-echo "1. Base: $(basename $BASE_LIB)"
+echo "1. Base: $(basename "$BASE_LIB")"
 i=2
-for lib in "${libs_to_merge[@]}"; do
-    echo "$i. $(basename $lib)"
+for lib in "${merge_order[@]}"; do
+    echo "$i. $(basename "$lib")"
     i=$((i + 1))
 done
 
-# Execute based on tool type
+# Execute merge based on tool type
+echo ""
 if [[ "$AR_CMD" == *"lib.exe"* ]]; then
-    # Windows: lib.exe
-    echo ""
     echo "Using Windows lib.exe..."
-    "$AR_CMD" /OUT:"$OUTPUT_LIB" "$BASE_LIB" "${libs_to_merge[@]}"
-
+    "$AR_CMD" /OUT:"$OUTPUT_LIB" "$BASE_LIB" "${merge_order[@]}"
 elif [[ "$AR_CMD" == *"libtool"* ]]; then
-    # macOS: libtool
-    echo ""
     echo "Using macOS libtool..."
-    "$AR_CMD" -static -o "$OUTPUT_LIB" "$BASE_LIB" "${libs_to_merge[@]}" 2>&1 | grep -v "warning duplicate member name" || true
-
+    "$AR_CMD" -static -o "$OUTPUT_LIB" "$BASE_LIB" "${merge_order[@]}" 2>&1 | grep -v "warning duplicate member name" || true
 else
-    # Linux/Unix: use MRI script for simple merge
-    echo ""
     echo "Using ar with MRI script..."
-
-    # Create MRI script
     MRI_SCRIPT=$(mktemp)
-    echo "CREATE $OUTPUT_LIB" > "$MRI_SCRIPT"
-    echo "ADDLIB $BASE_LIB" >> "$MRI_SCRIPT"
+    trap "rm -f $MRI_SCRIPT" EXIT
 
-    for lib in "${libs_to_merge[@]}"; do
-        echo "ADDLIB $lib" >> "$MRI_SCRIPT"
-    done
-
-    echo "SAVE" >> "$MRI_SCRIPT"
-    echo "END" >> "$MRI_SCRIPT"
+    {
+        echo "CREATE $OUTPUT_LIB"
+        echo "ADDLIB $BASE_LIB"
+        for lib in "${merge_order[@]}"; do
+            echo "ADDLIB $lib"
+        done
+        echo "SAVE"
+        echo "END"
+    } > "$MRI_SCRIPT"
 
     "$AR_CMD" -M < "$MRI_SCRIPT"
-    rm -f "$MRI_SCRIPT"
 fi
 
 object_count=$(ar t "$OUTPUT_LIB" 2>/dev/null | wc -l || echo "N/A")
-echo ""
 echo "✓ Merged library created with $object_count objects"
